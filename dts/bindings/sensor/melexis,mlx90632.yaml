@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Michele Tavecchio <tavecchiomichele03@gmail.com>, 
+# Alessandro Sola <alessandrosola03@gmail.com>,
+# Melexis Technologies NV
+#
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Melexis MLX90632 Infrared Temperature Sensor. See datasheet at
+    https://www.melexis.com/en/documents/documentation/datasheets/datasheet-mlx90632
+
+compatible: "melexis,mlx90632"
+
+include: [sensor-device.yaml, i2c-device.yaml]
