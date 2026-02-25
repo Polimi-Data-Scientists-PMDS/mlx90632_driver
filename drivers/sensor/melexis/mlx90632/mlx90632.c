@@ -17,7 +17,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/drivers/sensor/mlx90632.h>
+// #include <zephyr/drivers/sensor/mlx90632.h>  // TODO: create public header
 
 #include "mlx90632.h"
 
@@ -59,7 +59,7 @@ static int mlx90632_init(const struct device *dev)
     }
 
     if (status & MLX90632_STAT_EE_BUSY){
-        LOG_WARN ("EEPROM busy (copy in progress)");
+        LOG_WRN("EEPROM busy (copy in progress)");
         return -EBUSY;
     }
 
