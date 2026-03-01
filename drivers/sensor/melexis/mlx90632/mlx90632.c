@@ -28,10 +28,19 @@ static int mlx90632_reg_read(const struct device *dev, uint16_t reg, uint16_t *v
     const struct mlx90632_config *config = dev->config;
     uint8_t reg_addr[2] = { reg >> 8, reg & 0xFF };
     uint8_t data[2];
+    int ret;
 
-    
-    int ret = i2c_write_read_dt(&config->i2c, reg_addr, sizeof(reg_addr), data, sizeof(data));
+    /* Write register address */
+    ret = i2c_write_dt(&config->i2c, reg_addr, sizeof(reg_addr));
     if (ret < 0) {
+        LOG_ERR("Failed to write register address 0x%04X: %d", reg, ret);
+        return ret;
+    }
+
+    /* Read data from register */
+    ret = i2c_read_dt(&config->i2c, data, sizeof(data));
+    if (ret < 0) {
+        LOG_ERR("Failed to read data from register 0x%04X: %d", reg, ret);
         return ret;
     }
 
@@ -57,6 +66,7 @@ static int mlx90632_init(const struct device *dev)
         LOG_ERR("Failed to read status register");
         return ret;
     }
+    
 
     if (status & MLX90632_STAT_EE_BUSY){
         LOG_WRN("EEPROM busy (copy in progress)");
