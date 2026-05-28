@@ -371,94 +371,136 @@ static int mlx90632_trigger_measurement(const struct device *dev)
 	return mlx90632_reg_write(dev, MLX90632_REG_CTRL, reg_ctrl);
 }
 
-static double mlx90632_calc_amb(struct mlx90632_data *data)
+static int32_t mlx90632_calc_amb(struct mlx90632_data *data)
 {
-	double vr_ta = data->ram_9 + ((data->gb / 1024.0) * (data->ram_6 / 12.0));
-	double am_ta = data->ram_6 / 12.0;
-	double tmp_ta = (am_ta / vr_ta) * 524288.0;
+	int64_t am_ta = ((int64_t)data->ram_6 * 1000LL) / 12LL;
+	int64_t vr_aa = (int64_t)data->ram_9 * 1000000LL + ((int64_t)data->gb * am_ta) / 1024LL;
+	int64_t tmp = (((am_ta * 1000000LL) / vr_aa) << 19ULL) / 1000LL;
 
-	double Asub, Bsub, Ablock, Bblock, Cblock;
+	int64_t Asub, Bsub, Ablock, Bblock, Cblock;
 
-	Asub = ((double)data->p_t) / (double)17592186044416.0;
-	Bsub = (double)tmp_ta - ((double)data->p_r / (double)256.0);
+	Asub = ((int64_t)data->p_t * 10000000000LL) >> 44ULL;
+	Bsub = tmp - (((int64_t)data->p_r * 1000LL) >> 8ULL);
 	Ablock = Asub * (Bsub * Bsub);
-	Bblock = (Bsub / (double)data->p_g) * (double)1048576.0;
-	Cblock = (double)data->p_o / (double)256.0;
+	Bblock = ((Bsub * 10000000LL) / data->p_g) << 20ULL;
+	Cblock = ((int64_t)data->p_o * 10000000000LL) >> 8ULL;
 
-	return Bblock + Ablock + Cblock;
+	int64_t sum = (Ablock / 1000000LL) + Bblock + Cblock;
+
+	return (int32_t)(sum / 10000000LL);
 }
 
-static double mlx90632_preprocess_object(struct mlx90632_data *data)
+static int64_t mlx90632_preprocess_object(struct mlx90632_data *data)
 {
-	double s_obj, v_ir;
-	double t_amb = data->ambient_temp;
-	double kKa = (double)data->ka / 1024.0;
+	int64_t t_amb = data->ambient_temp;
+	int64_t kKa = ((int64_t)data->ka * 1000LL) >> 10ULL;
 
-	double vr_ir = (double)data->ram_9 + kKa * ((double)data->ram_6 / 12.0);
+	int64_t vr_ir =
+		(int64_t)data->ram_9 * 1000000LL + kKa * (((int64_t)data->ram_6 * 1000LL) / 12LL);
 
 	if (data->is_medical) {
-		s_obj = (double)(data->ram_4 + data->ram_5 + data->ram_7 + data->ram_8) / 4.0;
-		v_ir = s_obj - ((double)data->aa + (double)data->ab * (t_amb - 25.0));
+		int64_t s_obj =
+			((int64_t)data->ram_4 + data->ram_5 + data->ram_7 + data->ram_8) * 250000LL;
+		int64_t aa = (int64_t)data->aa * 1000000LL;
+		int64_t ab = ((int64_t)data->ab * (t_amb - 25000LL)) * 1000LL;
+		int64_t v_ir = s_obj - aa - ab;
+
+		int64_t tmp = (v_ir * 1000000LL) / vr_ir;
+		return (tmp * 524288LL) / 1000LL;
 	} else {
+		int64_t tmp;
 		if (data->last_cycle == 1) {
-			s_obj = (double)(data->ram_4 + data->ram_5) / 2.0;
+			tmp = (((int64_t)data->ram_4 + data->ram_5) * 500000000000LL) / vr_ir;
 		} else {
-			s_obj = (double)(data->ram_7 + data->ram_8) / 2.0;
+			tmp = (((int64_t)data->ram_7 + data->ram_8) * 500000000000LL) / vr_ir;
 		}
-		v_ir = s_obj;
+		return (tmp * 524288LL) / 1000LL;
 	}
-	return (v_ir / vr_ir) * 524288.0;
 }
 
-static double mlx90632_calc_object_medical(struct mlx90632_data *data)
+static int32_t mlx90632_calc_object_medical(struct mlx90632_data *data)
 {
-	double t_amb = data->ambient_temp;
-	double v_ir = mlx90632_preprocess_object(data);
+	int64_t t_amb = data->ambient_temp;
+	int64_t v_ir = mlx90632_preprocess_object(data);
 
-	double kFa = (double)data->fa / 17592186044416.0;
-	double kFb = (double)data->fb / 1048576.0;
-	double kGa = (double)data->ga / 1048576.0;
+	int64_t kFa = (((int64_t)data->fa * 10000000000LL) >> 46ULL) / 1000LL;
+	int64_t kFb = ((int64_t)data->fb * 100000000LL) >> 20ULL;
+	int64_t kGa = ((int64_t)data->ga * 100000000LL) >> 20ULL;
 
-	double t_amb_k = t_amb + 273.15;
-	double t_amb_k2 = t_amb_k * t_amb_k;
-	double t_amb_k4 = t_amb_k2 * t_amb_k2;
+	int64_t t_amb_k = t_amb + 273150LL;
+	int64_t t_amb_k2 = (t_amb_k * t_amb_k) / 10000LL;
+	int64_t t_amb_k4 = (t_amb_k2 * t_amb_k2) / 100000000LL;
 
-	double f_amb = (kFa * t_amb_k4) + (kFb * t_amb_k2 * t_amb_k) + (kGa * t_amb_k2);
+	int64_t f_amb = (kFa * t_amb_k4) / 1000LL +
+			(kFb * t_amb_k2 * (t_amb_k / 100LL)) / 100000LL +
+			(kGa * t_amb_k2) / 100000LL;
 
-	double t_obj_k = t_amb_k;
+	int64_t t_obj_k = t_amb_k;
 
 	for (int i = 0; i < 3; i++) {
-		double t_obj_k2 = t_obj_k * t_obj_k;
-		double t_obj_k3 = t_obj_k2 * t_obj_k;
-		double t_obj_k4 = t_obj_k2 * t_obj_k2;
+		int64_t t_obj_k2 = (t_obj_k * t_obj_k) / 10000LL;
+		int64_t t_obj_k3 = (t_obj_k2 * (t_obj_k / 100LL)) / 10000LL;
+		int64_t t_obj_k4 = (t_obj_k2 * t_obj_k2) / 100000000LL;
 
-		double f_obj = (kFa * t_obj_k4) + (kFb * t_obj_k3) + (kGa * t_obj_k2);
+		int64_t f_obj = (kFa * t_obj_k4) / 1000LL + (kFb * t_obj_k3) / 10000LL +
+				(kGa * t_obj_k2) / 100000LL;
 
-		double df_obj =
-			(4.0 * kFa * t_obj_k3) + (3.0 * kFb * t_obj_k2) + (2.0 * kGa * t_obj_k);
+		int64_t df_obj = (4LL * kFa * t_obj_k3) / 10000LL +
+				 (3LL * kFb * t_obj_k2) / 100000LL +
+				 (2LL * kGa * (t_obj_k / 10LL)) / 10000LL;
 
-		t_obj_k = t_obj_k + (v_ir - (f_obj - f_amb)) / df_obj;
+		if (df_obj == 0) {
+			break;
+		}
+
+		t_obj_k = t_obj_k + (((v_ir * 100LL) - (f_obj - f_amb) * 100LL) / (df_obj / 10LL));
 	}
-	double t_obj_c = t_obj_k - 273.15;
+	int64_t t_obj_c = t_obj_k - 273150LL;
 
-	return t_obj_c * (1.0 + (double)data->hb / 16384.0);
+	int64_t temp = t_obj_c + (t_obj_c * (int64_t)data->hb) / 16384LL;
+	return (int32_t)(temp / 100LL);
 }
 
-static double mlx90632_calc_object_standard(struct mlx90632_data *data)
+static uint32_t int_sqrt(uint64_t x)
 {
-	double v_ir = mlx90632_preprocess_object(data);
-	double t_amb = data->ambient_temp;
+	uint64_t res = 0;
+	uint64_t bit = 1ULL << 62;
 
-	double kFa = (double)data->fa / 17592186044416.0;
-	double kGa = (double)data->ga / 1048576.0;
+	while (bit > x) {
+		bit >>= 2;
+	}
 
-	double t_amb_k = t_amb + 273.15;
+	while (bit != 0) {
+		if (x >= res + bit) {
+			x -= res + bit;
+			res = (res >> 1) + bit;
+		} else {
+			res >>= 1;
+		}
+		bit >>= 2;
+	}
+	return (uint32_t)res;
+}
 
-	double v_ir_comp = v_ir / (1.0 + kGa * (t_amb - 25.0));
+static int32_t mlx90632_calc_object_standard(struct mlx90632_data *data)
+{
+	int64_t v_ir = mlx90632_preprocess_object(data);
+	int64_t t_amb = data->ambient_temp;
 
-	double t_obj_k = pow((v_ir_comp / kFa) + pow(t_amb_k, 4), 0.25);
+	int64_t kFa = data->fa;
+	int64_t kGa = ((int64_t)data->ga * 100000LL) >> 20ULL;
 
-	return t_obj_k - 273.15;
+	int64_t t_amb_k = (t_amb + 273150LL) / 10LL;
+
+	int64_t v_ir_comp = (v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL);
+
+	int64_t term = ((v_ir_comp * 107374182400000LL) / data->fa) * 16384LL;
+
+	int64_t t_obj_k = (int64_t)int_sqrt(int_sqrt(term + (uint64_t)(t_amb_k * t_amb_k) *
+								    (t_amb_k * t_amb_k))) *
+			  10LL;
+
+	return (int32_t)(t_obj_k - 273150LL);
 }
 
 static int mlx90632_read_extended_channels(const struct device *dev)
@@ -506,60 +548,80 @@ static int mlx90632_read_extended_channels(const struct device *dev)
 	return 0;
 }
 
-static double mlx90632_calc_ambient_extended(struct mlx90632_data *data)
+static int32_t mlx90632_calc_ambient_extended(struct mlx90632_data *data)
 {
+	int64_t am_ta = ((int64_t)data->ram_54 * 1000LL) / 12LL;
+	int64_t vr_ta = (int64_t)data->ram_57 * 1000000LL + ((int64_t)data->gb * am_ta) / 1024LL;
+	int64_t tmp_ta = (((am_ta * 1000000LL) / vr_ta) << 19ULL) / 1000LL;
 
-	double am_ta = (double)data->ram_54 / 12.0;
-	double vr_ta = (double)data->ram_57 + ((double)data->gb / 1024.0) * am_ta;
-	double tmp_ta = (am_ta / vr_ta) * 524288.0;
+	int64_t Asub, Bsub, Ablock, Bblock, Cblock;
 
-	double Asub = (double)data->p_t / 17592186044416.0;
-	double Bsub = tmp_ta - ((double)data->p_r / 256.0);
-	double Ablock = Asub * (Bsub * Bsub);
-	double Bblock = (Bsub / (double)data->p_g) * 1048576.0;
-	double Cblock = (double)data->p_o / 256.0;
+	Asub = ((int64_t)data->p_t * 10000000000LL) >> 44ULL;
+	Bsub = tmp_ta - (((int64_t)data->p_r * 1000LL) >> 8ULL);
+	Ablock = Asub * (Bsub * Bsub);
+	Bblock = ((Bsub * 10000000LL) / data->p_g) << 20ULL;
+	Cblock = ((int64_t)data->p_o * 10000000000LL) >> 8ULL;
 
-	return Ablock + Bblock + Cblock;
+	int64_t sum = (Ablock / 1000000LL) + Bblock + Cblock;
+
+	return (int32_t)(sum / 10000000LL);
 }
 
-static double mlx90632_calc_object_extended(struct mlx90632_data *data)
+static int32_t mlx90632_calc_object_extended(struct mlx90632_data *data)
 {
-	double t_amb = data->ambient_temp;
-	double kKa = (double)data->ka / 1024.0;
+	int64_t t_amb = data->ambient_temp;
 
-	double vr_to = (double)data->ram_57 + kKa * ((double)data->ram_54 / 12.0);
+	int64_t kKa = ((int64_t)data->ka * 1000LL) >> 10ULL;
+	int64_t am_ta = ((int64_t)data->ram_54 * 1000LL) / 12LL;
+	int64_t vr_to = (int64_t)data->ram_57 * 1000000LL + (kKa * am_ta);
 
-	double s = ((double)(data->ram_52 - data->ram_53 - data->ram_55 + data->ram_56) / 2.0) +
-		   (double)(data->ram_58 + data->ram_59);
-	double s_to = ((s / 12.0) / vr_to) * 524288.0;
+	int64_t s =
+		(((int64_t)data->ram_52 - data->ram_53 - data->ram_55 + data->ram_56) * 500000LL) +
+		((int64_t)data->ram_58 + data->ram_59) * 1000000LL;
 
-	double kFa = ((double)data->fa / 17592186044416.0) / 2.0;
-	double kFb = (double)data->fb / 68719476736.0;
-	double kGa = (double)data->ga / 68719476736.0;
-	double kHa = (double)data->ha / 16384.0;
-	double kHb = (double)data->hb / 1024.0;
+	int64_t tmp_s = ((s / 12LL) * 1000000LL) / vr_to;
+	int64_t s_to = (tmp_s * 524288LL) / 1000LL;
 
-	double t_amb_k = data->ambient_temp + 273.15;
-	double t_amb_k2 = t_amb_k * t_amb_k;
-	double t_amb_k4 = t_amb_k2 * t_amb_k2;
+	int64_t kFa = (((int64_t)data->fa * 10000000000LL) >> 47ULL) / 1000LL;
+	int64_t kFb = ((int64_t)data->fb * 100000000LL) >> 36ULL;
+	int64_t kGa = ((int64_t)data->ga * 100000000LL) >> 36ULL;
+	int64_t kHa = ((int64_t)data->ha * 10000LL) >> 14ULL;
+	int64_t kHb = ((int64_t)data->hb * 1000LL) >> 10ULL;
 
-	double f_amb = (kFa * t_amb_k4) + (kFb * t_amb_k2 * t_amb_k) + (kGa * t_amb_k2);
+	int64_t t_amb_k = t_amb + 273150LL;
+	int64_t t_amb_k2 = (t_amb_k * t_amb_k) / 10000LL;
+	int64_t t_amb_k4 = (t_amb_k2 * t_amb_k2) / 100000000LL;
 
-	double t_obj_k = t_amb_k;
+	int64_t f_amb = (kFa * t_amb_k4) / 1000LL +
+			(kFb * t_amb_k2 * (t_amb_k / 100LL)) / 100000LL +
+			(kGa * t_amb_k2) / 100000LL;
+
+	int64_t t_obj_k = t_amb_k;
 
 	for (int i = 0; i < 3; i++) {
-		double t_obj_k2 = t_obj_k * t_obj_k;
-		double t_obj_k3 = t_obj_k2 * t_obj_k;
-		double t_obj_k4 = t_obj_k2 * t_obj_k2;
+		int64_t t_obj_k2 = (t_obj_k * t_obj_k) / 10000LL;
+		int64_t t_obj_k3 = (t_obj_k2 * (t_obj_k / 100LL)) / 10000LL;
+		int64_t t_obj_k4 = (t_obj_k2 * t_obj_k2) / 100000000LL;
 
-		double f_obj = (kFa * t_obj_k4) + (kFb * t_obj_k3) + (kGa * t_obj_k2);
-		double df_obj =
-			(4.0 * kFa * t_obj_k3) + (3.0 * kFb * t_obj_k2) + (2.0 * kGa * t_obj_k);
+		int64_t f_obj = (kFa * t_obj_k4) / 1000LL + (kFb * t_obj_k3) / 10000LL +
+				(kGa * t_obj_k2) / 100000LL;
 
-		t_obj_k = t_obj_k + (s_to - kHa * (f_obj - f_amb)) / (kHa * df_obj);
+		int64_t df_obj = (4LL * kFa * t_obj_k3) / 10000LL +
+				 (3LL * kFb * t_obj_k2) / 100000LL +
+				 (2LL * kGa * (t_obj_k / 10LL)) / 10000LL;
+
+		int64_t delta_f = f_obj - f_amb;
+		int64_t num = (s_to * 100LL) - (kHa * delta_f) / 100LL;
+		int64_t den = (kHa * df_obj) / 100000LL;
+
+		if (den == 0) {
+			break;
+		}
+
+		t_obj_k = t_obj_k + (num / den);
 	}
 
-	return (t_obj_k - 273.15) - kHb;
+	return (int32_t)(t_obj_k - 273150LL - kHb);
 }
 
 static void mlx90632_work_handler(struct k_work *work)
@@ -696,11 +758,13 @@ static int mlx90632_channel_get(const struct device *dev, enum sensor_channel ch
 
 	switch (chan) {
 	case SENSOR_CHAN_DIE_TEMP:
-		sensor_value_from_double(val, data->ambient_temp);
+		val->val1 = data->ambient_temp / 1000;
+		val->val2 = (data->ambient_temp % 1000) * 1000;
 		break;
 
 	case SENSOR_CHAN_AMBIENT_TEMP:
-		sensor_value_from_double(val, data->object_temp);
+		val->val1 = data->object_temp / 1000;
+		val->val2 = (data->object_temp % 1000) * 1000;
 		break;
 
 	default:

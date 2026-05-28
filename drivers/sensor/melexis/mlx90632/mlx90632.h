@@ -125,8 +125,8 @@ struct mlx90632_data {
 	int16_t ram_59;
 	int16_t ram_60;
 
-	double ambient_temp;
-	double object_temp;
+	int32_t ambient_temp;
+	int32_t object_temp;
 
 	uint8_t last_cycle;
 
