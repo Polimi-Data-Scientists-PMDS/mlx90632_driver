@@ -34,7 +34,7 @@ static int mlx90632_reg_read(const struct device *dev, uint16_t reg, uint16_t *v
 		LOG_ERR("Failed to read register 0x%04x (rc=%d)", reg, ret);
 		return ret;
 	}
-
+	LOG_DBG("Read register 0x%04x: 0x%02x%02x", reg, data[0], data[1]);
 	*val = sys_get_be16(data);
 	return 0;
 }
@@ -69,8 +69,26 @@ static int mlx90632_read_32bit_param(const struct device *dev, uint16_t addr, in
 	}
 
 	*dest = (int32_t)((uint32_t)ms << 16 | ls);
+
+#ifdef CONFIG_MLX90632_DEBUG
+	printk("MLX90632 EE[0x%04X]=0x%04X EE[0x%04X]=0x%04X => 0x%08X\n",
+		   addr, ls, addr + 1, ms, *dest);
+#endif
 	return 0;
 }
+
+#ifdef CONFIG_MLX90632_DEBUG
+static void mlx90632_log_calibration(const struct device *dev)
+{
+	const struct mlx90632_data *data = dev->data;
+
+	printk("MLX90632 calibration: p_r=0x%08X p_g=0x%08X p_t=0x%08X p_o=0x%08X\n",
+		   data->p_r, data->p_g, data->p_t, data->p_o);
+	printk("MLX90632 calibration: Ea=0x%08X Eb=0x%08X Fa=0x%08X Fb=0x%08X Ga=0x%08X Gb=0x%04X Ka=0x%04X Ha=0x%04X Hb=0x%04X\n",
+		   data->ea, data->eb, data->fa, data->fb, data->ga, data->gb, data->ka, data->ha,
+		   data->hb);
+}
+#endif
 
 static int mlx90632_reg_write(const struct device *dev, uint16_t reg, uint16_t val)
 {
@@ -276,6 +294,30 @@ static int mlx90632_set_refresh_rate(const struct device *dev)
 	return ret;
 }
 
+static void mlx90632_work_handler(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct mlx90632_data *data = CONTAINER_OF(dwork, struct mlx90632_data, data_work);
+	const struct device *dev = data->dev;
+
+	uint16_t reg_status;
+	int ret;
+
+	ret = mlx90632_reg_read(dev, MLX90632_REG_STATUS, &reg_status);
+	if (ret < 0) {
+		data->work_ret = ret;
+		k_sem_give(&data->data_sem);
+		return;
+	}
+
+	if (reg_status & MLX90632_STAT_DATA_RDY) {
+		data->work_ret = 0;
+		k_sem_give(&data->data_sem);
+	} else {
+		k_work_reschedule(&data->data_work, K_MSEC(10));
+	}
+}
+
 static int mlx90632_init(const struct device *dev)
 {
 	const struct mlx90632_config *cfg = dev->config;
@@ -291,7 +333,7 @@ static int mlx90632_init(const struct device *dev)
 	k_work_init_delayable(&data->data_work, mlx90632_work_handler);
 
 	if (!i2c_is_ready_dt(&cfg->i2c)) {
-		LOG_ERR_DEVICE_NOT_READY(cfg->i2c.bus);
+		LOG_ERR("I2C device not ready on bus %s", cfg->i2c.bus);
 		return -ENODEV;
 	}
 
@@ -335,6 +377,10 @@ static int mlx90632_init(const struct device *dev)
 		return ret;
 	}
 
+#ifdef CONFIG_MLX90632_DEBUG
+	mlx90632_log_calibration(dev);
+#endif
+
 	int was_reset = mlx90632_set_refresh_rate(dev);
 
 	if (was_reset < 0) {
@@ -374,9 +420,15 @@ static int mlx90632_trigger_measurement(const struct device *dev)
 static int32_t mlx90632_calc_amb(struct mlx90632_data *data)
 {
 	int64_t am_ta = ((int64_t)data->ram_6 * 1000LL) / 12LL;
-	int64_t vr_aa = (int64_t)data->ram_9 * 1000000LL + ((int64_t)data->gb * am_ta) / 1024LL;
-	int64_t tmp = (((am_ta * 1000000LL) / vr_aa) << 19ULL) / 1000LL;
-
+	int64_t KGb = ((int64_t)data->gb * 1000LL) >> 10ULL;
+	int64_t vr_ta = (int64_t)data->ram_9 * 1000000LL + (KGb * am_ta);
+	//print debug info for intermediate values pr and pg in hex'
+	LOG_DBG("p_r: 0x%04X, p_g: 0x%04X, p_t: 0x%04X, p_o: 0x%04X", data->p_r, data->p_g, data->p_t, data->p_o);
+	LOG_DBG("gb: %d, ram_6: %d, ram_9: %d", data->gb, data->ram_6, data->ram_9);
+	LOG_DBG("am_ta: %lld, KGb: %lld, vr_ta: %lld", am_ta, KGb, vr_ta);
+	int64_t tmp = (((am_ta * 1000000000LL) / vr_ta) << 19ULL);
+	tmp = tmp / 1000LL;
+	LOG_DBG("tmp: %lld", tmp);
 	int64_t Asub, Bsub, Ablock, Bblock, Cblock;
 
 	Asub = ((int64_t)data->p_t * 10000000000LL) >> 44ULL;
@@ -384,7 +436,6 @@ static int32_t mlx90632_calc_amb(struct mlx90632_data *data)
 	Ablock = Asub * (Bsub * Bsub);
 	Bblock = ((Bsub * 10000000LL) / data->p_g) << 20ULL;
 	Cblock = ((int64_t)data->p_o * 10000000000LL) >> 8ULL;
-
 	int64_t sum = (Ablock / 1000000LL) + Bblock + Cblock;
 
 	return (int32_t)(sum / 10000000LL);
@@ -398,67 +449,13 @@ static int64_t mlx90632_preprocess_object(struct mlx90632_data *data)
 	int64_t vr_ir =
 		(int64_t)data->ram_9 * 1000000LL + kKa * (((int64_t)data->ram_6 * 1000LL) / 12LL);
 
-	if (data->is_medical) {
-		int64_t s_obj =
-			((int64_t)data->ram_4 + data->ram_5 + data->ram_7 + data->ram_8) * 250000LL;
-		int64_t aa = (int64_t)data->aa * 1000000LL;
-		int64_t ab = ((int64_t)data->ab * (t_amb - 25000LL)) * 1000LL;
-		int64_t v_ir = s_obj - aa - ab;
-
-		int64_t tmp = (v_ir * 1000000LL) / vr_ir;
-		return (tmp * 524288LL) / 1000LL;
+	int64_t tmp;
+	if (data->last_cycle == 1) {
+		tmp = ((((int64_t)data->ram_4 + data->ram_5) * 500000000000LL) / 12LL) / vr_ir;
 	} else {
-		int64_t tmp;
-		if (data->last_cycle == 1) {
-			tmp = (((int64_t)data->ram_4 + data->ram_5) * 500000000000LL) / vr_ir;
-		} else {
-			tmp = (((int64_t)data->ram_7 + data->ram_8) * 500000000000LL) / vr_ir;
-		}
-		return (tmp * 524288LL) / 1000LL;
+		tmp = ((((int64_t)data->ram_7 + data->ram_8) * 500000000000LL) / 12LL) / vr_ir;
 	}
-}
-
-static int32_t mlx90632_calc_object_medical(struct mlx90632_data *data)
-{
-	int64_t t_amb = data->ambient_temp;
-	int64_t v_ir = mlx90632_preprocess_object(data);
-
-	int64_t kFa = (((int64_t)data->fa * 10000000000LL) >> 46ULL) / 1000LL;
-	int64_t kFb = ((int64_t)data->fb * 100000000LL) >> 20ULL;
-	int64_t kGa = ((int64_t)data->ga * 100000000LL) >> 20ULL;
-
-	int64_t t_amb_k = t_amb + 273150LL;
-	int64_t t_amb_k2 = (t_amb_k * t_amb_k) / 10000LL;
-	int64_t t_amb_k4 = (t_amb_k2 * t_amb_k2) / 100000000LL;
-
-	int64_t f_amb = (kFa * t_amb_k4) / 1000LL +
-			(kFb * t_amb_k2 * (t_amb_k / 100LL)) / 100000LL +
-			(kGa * t_amb_k2) / 100000LL;
-
-	int64_t t_obj_k = t_amb_k;
-
-	for (int i = 0; i < 3; i++) {
-		int64_t t_obj_k2 = (t_obj_k * t_obj_k) / 10000LL;
-		int64_t t_obj_k3 = (t_obj_k2 * (t_obj_k / 100LL)) / 10000LL;
-		int64_t t_obj_k4 = (t_obj_k2 * t_obj_k2) / 100000000LL;
-
-		int64_t f_obj = (kFa * t_obj_k4) / 1000LL + (kFb * t_obj_k3) / 10000LL +
-				(kGa * t_obj_k2) / 100000LL;
-
-		int64_t df_obj = (4LL * kFa * t_obj_k3) / 10000LL +
-				 (3LL * kFb * t_obj_k2) / 100000LL +
-				 (2LL * kGa * (t_obj_k / 10LL)) / 10000LL;
-
-		if (df_obj == 0) {
-			break;
-		}
-
-		t_obj_k = t_obj_k + (((v_ir * 100LL) - (f_obj - f_amb) * 100LL) / (df_obj / 10LL));
-	}
-	int64_t t_obj_c = t_obj_k - 273150LL;
-
-	int64_t temp = t_obj_c + (t_obj_c * (int64_t)data->hb) / 16384LL;
-	return (int32_t)(temp / 100LL);
+	return (tmp * 524288LL) / 1000LL;
 }
 
 static uint32_t int_sqrt(uint64_t x)
@@ -482,7 +479,7 @@ static uint32_t int_sqrt(uint64_t x)
 	return (uint32_t)res;
 }
 
-static int32_t mlx90632_calc_object_standard(struct mlx90632_data *data)
+static int32_t mlx90632_calc_object(struct mlx90632_data *data)
 {
 	int64_t v_ir = mlx90632_preprocess_object(data);
 	int64_t t_amb = data->ambient_temp;
@@ -494,7 +491,9 @@ static int32_t mlx90632_calc_object_standard(struct mlx90632_data *data)
 
 	int64_t v_ir_comp = (v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL);
 
-	int64_t term = ((v_ir_comp * 107374182400000LL) / data->fa) * 16384LL;
+	int64_t fa = data->fa != 0 ? data->fa : 1;
+
+	int64_t term = v_ir_comp * (1759218604441600000LL / fa);
 
 	int64_t t_obj_k = (int64_t)int_sqrt(int_sqrt(term + (uint64_t)(t_amb_k * t_amb_k) *
 								    (t_amb_k * t_amb_k))) *
@@ -624,29 +623,6 @@ static int32_t mlx90632_calc_object_extended(struct mlx90632_data *data)
 	return (int32_t)(t_obj_k - 273150LL - kHb);
 }
 
-static void mlx90632_work_handler(struct k_work *work)
-{
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct mlx90632_data *data = CONTAINER_OF(dwork, struct mlx90632_data, data_work);
-	const struct device *dev = data->dev;
-
-	uint16_t reg_status;
-	int ret;
-
-	ret = mlx90632_reg_read(dev, MLX90632_REG_STATUS, &reg_status);
-	if (ret < 0) {
-		data->work_ret = ret;
-		k_sem_give(&data->data_sem);
-		return;
-	}
-
-	if (reg_status & MLX90632_STAT_DATA_RDY) {
-		data->work_ret = 0;
-		k_sem_give(&data->data_sem);
-	} else {
-		k_work_reschedule(&data->data_work, K_MSEC(10));
-	}
-}
 static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel chan)
 {
 	struct mlx90632_data *data = dev->data;
@@ -672,7 +648,10 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 	if (data->work_ret < 0) {
 		return data->work_ret;
 	}
-
+    ret = mlx90632_reg_read(dev, MLX90632_REG_STATUS, &reg_status);
+    if (ret < 0) {
+        return ret;
+    }
 	uint8_t cycle_pos = (reg_status >> 2) & 0x1F;
 
 	data->last_cycle = cycle_pos;
@@ -742,10 +721,8 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 
 	if (data->is_extended) {
 		data->object_temp = mlx90632_calc_object_extended(data);
-	} else if (data->is_medical) {
-		data->object_temp = mlx90632_calc_object_medical(data);
 	} else {
-		data->object_temp = mlx90632_calc_object_standard(data);
+		data->object_temp = mlx90632_calc_object(data);
 	}
 
 	return 0;
@@ -786,6 +763,6 @@ static DEVICE_API(sensor, mlx90632_driver_api) = {
 	};                                                                                         \
 	SENSOR_DEVICE_DT_INST_DEFINE(inst, mlx90632_init, NULL, &mlx90632_data_##inst,             \
 				     &mlx90632_config_##inst, POST_KERNEL,                         \
-				     CONFIG_SENSOR_INIT_PRIORITY, &mlx90632_api_funcs);
+				     CONFIG_SENSOR_INIT_PRIORITY, &mlx90632_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(MLX90632_DEFINE)
