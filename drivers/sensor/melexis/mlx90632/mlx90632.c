@@ -226,7 +226,7 @@ static int mlx90632_set_refresh_rate(const struct device *dev)
 	struct mlx90632_data *data = dev->data;
 	int num_regs;
 
-	if (data->is_extended) {
+	if (IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE)) {
 		target_ee1 = 0x8000 | (rate << 8);
 		target_ee2 = 0x8012 | (rate << 8);
 		target_ee3 = 0x800C | (rate << 8);
@@ -238,7 +238,7 @@ static int mlx90632_set_refresh_rate(const struct device *dev)
 		num_regs = 2;
 	}
 
-	ret = mlx90632_reg_read(dev, data->is_extended ? 0x24F1 : 0x24E1, &current_ee);
+	ret = mlx90632_reg_read(dev, IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE) ? 0x24F1 : 0x24E1, &current_ee);
 	if (ret == 0 && current_ee == target_ee1) {
 		return 0;
 	}
@@ -250,7 +250,7 @@ static int mlx90632_set_refresh_rate(const struct device *dev)
 	uint16_t addrs[3];
 	uint16_t vals[3];
 
-	if (data->is_extended) {
+	if (IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE)) {
 		addrs[0] = 0x24F1;
 		vals[0] = target_ee1;
 		addrs[1] = 0x24F2;
@@ -367,12 +367,6 @@ static int mlx90632_init(const struct device *dev)
 		return ret;
 	}
 
-	if ((ee_version & MLX90632_XTD_RNG_BIT) == MLX90632_XTD_RNG_BIT) {
-		data->is_extended = true;
-	} else {
-		data->is_extended = false;
-	}
-
 	ret = mlx90632_load_calibration(dev);
 	if (ret < 0) {
 		return ret;
@@ -394,7 +388,12 @@ static int mlx90632_init(const struct device *dev)
 	}
 
 	reg_ctrl &= ~(0x03 << 1);
-	reg_ctrl &= ~(0x07 << 8);
+	reg_ctrl &= ~(0x1F << 4);
+
+#if IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE)
+	reg_ctrl |= (0x11 << 4);
+#endif
+
 	reg_ctrl |= mlx90632_get_control_bits();
 
 	ret = mlx90632_reg_write(dev, MLX90632_REG_CTRL, reg_ctrl);
@@ -502,7 +501,7 @@ static int32_t mlx90632_calc_object(struct mlx90632_data *data)
 	int64_t v_ir_comp =
 		(v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL + kFb);
 
-	int64_t term = v_ir_comp * (1759218604441600000LL / fa);
+	int64_t term = v_ir_comp * (17592186 04441600000LL / data->fa);
 
 	int64_t t_obj_k = (int64_t)int_sqrt(int_sqrt(term + (uint64_t)(t_amb_k * t_amb_k) *
 								    (t_amb_k * t_amb_k))) *
@@ -652,7 +651,7 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 
 	data->last_cycle = cycle_pos;
 
-	if (data->is_extended) {
+	if (IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE)) {
 		ret = mlx90632_read_extended_channels(dev);
 		if (ret < 0) {
 			return ret;
@@ -696,7 +695,7 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 		return ret;
 	}
 
-	if (data->is_extended) {
+	if (IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE)) {
 		data->object_temp = mlx90632_calc_object_extended(data);
 	} else {
 		data->object_temp = mlx90632_calc_object(data);

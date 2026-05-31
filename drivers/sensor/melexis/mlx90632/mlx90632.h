@@ -130,9 +130,6 @@ struct mlx90632_data {
 
 	uint8_t last_cycle;
 
-	bool is_medical;
-	bool is_extended;
-
 	const struct device *dev;
 	struct k_work_delayable data_work;
 	struct k_sem data_sem;
