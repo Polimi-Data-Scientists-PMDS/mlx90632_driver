@@ -122,12 +122,6 @@ static int mlx90632_load_calibration(const struct device *dev)
 		return ret;
 	}
 
-	if ((p_code & 0x000F) == 0x0001) {
-		data->is_medical = true;
-	} else {
-		data->is_medical = false;
-	}
-
 	ret = mlx90632_read_32bit_param(dev, MLX90632_EE_P_R, &data->p_r);
 	if (ret < 0) {
 		return ret;
@@ -501,7 +495,7 @@ static int32_t mlx90632_calc_object(struct mlx90632_data *data)
 	int64_t v_ir_comp =
 		(v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL + kFb);
 
-	int64_t term = v_ir_comp * (17592186 04441600000LL / data->fa);
+	int64_t term = v_ir_comp * (1759218604441600000LL / data->fa);
 
 	int64_t t_obj_k = (int64_t)int_sqrt(int_sqrt(term + (uint64_t)(t_amb_k * t_amb_k) *
 								    (t_amb_k * t_amb_k))) *
