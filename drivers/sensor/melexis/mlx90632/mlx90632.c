@@ -71,8 +71,8 @@ static int mlx90632_read_32bit_param(const struct device *dev, uint16_t addr, in
 	*dest = (int32_t)((uint32_t)ms << 16 | ls);
 
 #ifdef CONFIG_MLX90632_DEBUG
-	printk("MLX90632 EE[0x%04X]=0x%04X EE[0x%04X]=0x%04X => 0x%08X\n",
-		   addr, ls, addr + 1, ms, *dest);
+	printk("MLX90632 EE[0x%04X]=0x%04X EE[0x%04X]=0x%04X => 0x%08X\n", addr, ls, addr + 1, ms,
+	       *dest);
 #endif
 	return 0;
 }
@@ -82,11 +82,12 @@ static void mlx90632_log_calibration(const struct device *dev)
 {
 	const struct mlx90632_data *data = dev->data;
 
-	printk("MLX90632 calibration: p_r=0x%08X p_g=0x%08X p_t=0x%08X p_o=0x%08X\n",
-		   data->p_r, data->p_g, data->p_t, data->p_o);
-	printk("MLX90632 calibration: Ea=0x%08X Eb=0x%08X Fa=0x%08X Fb=0x%08X Ga=0x%08X Gb=0x%04X Ka=0x%04X Ha=0x%04X Hb=0x%04X\n",
-		   data->ea, data->eb, data->fa, data->fb, data->ga, data->gb, data->ka, data->ha,
-		   data->hb);
+	printk("MLX90632 calibration: p_r=0x%08X p_g=0x%08X p_t=0x%08X p_o=0x%08X\n", data->p_r,
+	       data->p_g, data->p_t, data->p_o);
+	printk("MLX90632 calibration: Ea=0x%08X Eb=0x%08X Fa=0x%08X Fb=0x%08X Ga=0x%08X Gb=0x%04X "
+	       "Ka=0x%04X Ha=0x%04X Hb=0x%04X\n",
+	       data->ea, data->eb, data->fa, data->fb, data->ga, data->gb, data->ka, data->ha,
+	       data->hb);
 }
 #endif
 
@@ -422,8 +423,9 @@ static int32_t mlx90632_calc_amb(struct mlx90632_data *data)
 	int64_t am_ta = ((int64_t)data->ram_6 * 1000LL) / 12LL;
 	int64_t KGb = ((int64_t)data->gb * 1000LL) >> 10ULL;
 	int64_t vr_ta = (int64_t)data->ram_9 * 1000000LL + (KGb * am_ta);
-	//print debug info for intermediate values pr and pg in hex'
-	LOG_DBG("p_r: 0x%04X, p_g: 0x%04X, p_t: 0x%04X, p_o: 0x%04X", data->p_r, data->p_g, data->p_t, data->p_o);
+
+	LOG_DBG("p_r: 0x%04X, p_g: 0x%04X, p_t: 0x%04X, p_o: 0x%04X", data->p_r, data->p_g,
+		data->p_t, data->p_o);
 	LOG_DBG("gb: %d, ram_6: %d, ram_9: %d", data->gb, data->ram_6, data->ram_9);
 	LOG_DBG("am_ta: %lld, KGb: %lld, vr_ta: %lld", am_ta, KGb, vr_ta);
 	int64_t tmp = (((am_ta * 1000000000LL) / vr_ta) << 19ULL);
@@ -484,14 +486,21 @@ static int32_t mlx90632_calc_object(struct mlx90632_data *data)
 	int64_t v_ir = mlx90632_preprocess_object(data);
 	int64_t t_amb = data->ambient_temp;
 
-	int64_t kFa = data->fa;
 	int64_t kGa = ((int64_t)data->ga * 100000LL) >> 20ULL;
+	int64_t kFb;
+	int64_t t_adut;
 
 	int64_t t_amb_k = (t_amb + 273150LL) / 10LL;
 
-	int64_t v_ir_comp = (v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL);
+	int64_t kEa = ((int64_t)data->ea * 1000LL) >> 16LL;
+	int64_t kEb = ((int64_t)data->eb * 1000LL) >> 8LL;
 
-	int64_t fa = data->fa != 0 ? data->fa : 1;
+	t_adut = (((t_amb - kEb) * 1000000LL) / kEa) + 25000000LL;
+
+	kFb = (((int64_t)data->fb * (t_adut - 25000000LL)) >> 36ULL) / 10LL;
+
+	int64_t v_ir_comp =
+		(v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL + kFb);
 
 	int64_t term = v_ir_comp * (1759218604441600000LL / fa);
 
@@ -550,8 +559,11 @@ static int mlx90632_read_extended_channels(const struct device *dev)
 static int32_t mlx90632_calc_ambient_extended(struct mlx90632_data *data)
 {
 	int64_t am_ta = ((int64_t)data->ram_54 * 1000LL) / 12LL;
-	int64_t vr_ta = (int64_t)data->ram_57 * 1000000LL + ((int64_t)data->gb * am_ta) / 1024LL;
-	int64_t tmp_ta = (((am_ta * 1000000LL) / vr_ta) << 19ULL) / 1000LL;
+	int64_t KGb = ((int64_t)data->gb * 1000LL) >> 10ULL;
+	int64_t vr_ta = (int64_t)data->ram_57 * 1000000LL + (KGb * am_ta);
+
+	int64_t tmp_ta = (((am_ta * 1000000000LL) / vr_ta) << 19ULL);
+	tmp_ta = tmp_ta / 1000LL;
 
 	int64_t Asub, Bsub, Ablock, Bblock, Cblock;
 
@@ -579,48 +591,32 @@ static int32_t mlx90632_calc_object_extended(struct mlx90632_data *data)
 		((int64_t)data->ram_58 + data->ram_59) * 1000000LL;
 
 	int64_t tmp_s = ((s / 12LL) * 1000000LL) / vr_to;
-	int64_t s_to = (tmp_s * 524288LL) / 1000LL;
+	int64_t v_ir = (tmp_s * 524288LL) / 1000LL;
 
-	int64_t kFa = (((int64_t)data->fa * 10000000000LL) >> 47ULL) / 1000LL;
-	int64_t kFb = ((int64_t)data->fb * 100000000LL) >> 36ULL;
-	int64_t kGa = ((int64_t)data->ga * 100000000LL) >> 36ULL;
-	int64_t kHa = ((int64_t)data->ha * 10000LL) >> 14ULL;
-	int64_t kHb = ((int64_t)data->hb * 1000LL) >> 10ULL;
+	int64_t kFa = data->fa / 2LL;
+	int64_t kGa = ((int64_t)data->ga * 100000LL) >> 20ULL;
+	int64_t kFb;
+	int64_t t_adut;
 
-	int64_t t_amb_k = t_amb + 273150LL;
-	int64_t t_amb_k2 = (t_amb_k * t_amb_k) / 10000LL;
-	int64_t t_amb_k4 = (t_amb_k2 * t_amb_k2) / 100000000LL;
+	int64_t t_amb_k = (t_amb + 273150LL) / 10LL;
 
-	int64_t f_amb = (kFa * t_amb_k4) / 1000LL +
-			(kFb * t_amb_k2 * (t_amb_k / 100LL)) / 100000LL +
-			(kGa * t_amb_k2) / 100000LL;
+	int64_t kEa = ((int64_t)data->ea * 1000LL) >> 16LL;
+	int64_t kEb = ((int64_t)data->eb * 1000LL) >> 8LL;
 
-	int64_t t_obj_k = t_amb_k;
+	t_adut = (((t_amb - kEb) * 1000000LL) / kEa) + 25000000LL;
 
-	for (int i = 0; i < 3; i++) {
-		int64_t t_obj_k2 = (t_obj_k * t_obj_k) / 10000LL;
-		int64_t t_obj_k3 = (t_obj_k2 * (t_obj_k / 100LL)) / 10000LL;
-		int64_t t_obj_k4 = (t_obj_k2 * t_obj_k2) / 100000000LL;
+	kFb = (((int64_t)data->fb * (t_adut - 25000000LL)) >> 36ULL) / 10LL;
 
-		int64_t f_obj = (kFa * t_obj_k4) / 1000LL + (kFb * t_obj_k3) / 10000LL +
-				(kGa * t_obj_k2) / 100000LL;
+	int64_t v_ir_comp =
+		(v_ir * 100000LL) / (100000LL + (kGa * (t_amb - 25000LL)) / 1000LL + kFb);
 
-		int64_t df_obj = (4LL * kFa * t_obj_k3) / 10000LL +
-				 (3LL * kFb * t_obj_k2) / 100000LL +
-				 (2LL * kGa * (t_obj_k / 10LL)) / 10000LL;
+	int64_t term = v_ir_comp * (1759218604441600000LL / kFa);
 
-		int64_t delta_f = f_obj - f_amb;
-		int64_t num = (s_to * 100LL) - (kHa * delta_f) / 100LL;
-		int64_t den = (kHa * df_obj) / 100000LL;
+	int64_t t_obj_k = (int64_t)int_sqrt(int_sqrt(term + (uint64_t)(t_amb_k * t_amb_k) *
+								    (t_amb_k * t_amb_k))) *
+			  10LL;
 
-		if (den == 0) {
-			break;
-		}
-
-		t_obj_k = t_obj_k + (num / den);
-	}
-
-	return (int32_t)(t_obj_k - 273150LL - kHb);
+	return (int32_t)(t_obj_k - 273150LL);
 }
 
 static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel chan)
@@ -648,10 +644,10 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 	if (data->work_ret < 0) {
 		return data->work_ret;
 	}
-    ret = mlx90632_reg_read(dev, MLX90632_REG_STATUS, &reg_status);
-    if (ret < 0) {
-        return ret;
-    }
+	ret = mlx90632_reg_read(dev, MLX90632_REG_STATUS, &reg_status);
+	if (ret < 0) {
+		return ret;
+	}
 	uint8_t cycle_pos = (reg_status >> 2) & 0x1F;
 
 	data->last_cycle = cycle_pos;
@@ -673,7 +669,7 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 		if (ret < 0) {
 			return ret;
 		}
-		if (data->is_medical) {
+		if (cycle_pos == 1) {
 			ret = mlx90632_reg_read(dev, MLX90632_RAM_4, &data->ram_4);
 			if (ret < 0) {
 				return ret;
@@ -682,6 +678,7 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 			if (ret < 0) {
 				return ret;
 			}
+		} else {
 			ret = mlx90632_reg_read(dev, MLX90632_RAM_7, &data->ram_7);
 			if (ret < 0) {
 				return ret;
@@ -689,26 +686,6 @@ static int mlx90632_sample_fetch(const struct device *dev, enum sensor_channel c
 			ret = mlx90632_reg_read(dev, MLX90632_RAM_8, &data->ram_8);
 			if (ret < 0) {
 				return ret;
-			}
-		} else {
-			if (cycle_pos == 1) {
-				ret = mlx90632_reg_read(dev, MLX90632_RAM_4, &data->ram_4);
-				if (ret < 0) {
-					return ret;
-				}
-				ret = mlx90632_reg_read(dev, MLX90632_RAM_5, &data->ram_5);
-				if (ret < 0) {
-					return ret;
-				}
-			} else {
-				ret = mlx90632_reg_read(dev, MLX90632_RAM_7, &data->ram_7);
-				if (ret < 0) {
-					return ret;
-				}
-				ret = mlx90632_reg_read(dev, MLX90632_RAM_8, &data->ram_8);
-				if (ret < 0) {
-					return ret;
-				}
 			}
 		}
 		data->ambient_temp = mlx90632_calc_amb(data);
