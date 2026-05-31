@@ -34,7 +34,6 @@ static int mlx90632_reg_read(const struct device *dev, uint16_t reg, uint16_t *v
 		LOG_ERR("Failed to read register 0x%04x (rc=%d)", reg, ret);
 		return ret;
 	}
-	LOG_DBG("Read register 0x%04x: 0x%02x%02x", reg, data[0], data[1]);
 	*val = sys_get_be16(data);
 	return 0;
 }
@@ -70,26 +69,6 @@ static int mlx90632_read_32bit_param(const struct device *dev, uint16_t addr, in
 
 	*dest = (int32_t)((uint32_t)ms << 16 | ls);
 
-#ifdef CONFIG_MLX90632_DEBUG
-	printk("MLX90632 EE[0x%04X]=0x%04X EE[0x%04X]=0x%04X => 0x%08X\n", addr, ls, addr + 1, ms,
-	       *dest);
-#endif
-	return 0;
-}
-
-#ifdef CONFIG_MLX90632_DEBUG
-static void mlx90632_log_calibration(const struct device *dev)
-{
-	const struct mlx90632_data *data = dev->data;
-
-	printk("MLX90632 calibration: p_r=0x%08X p_g=0x%08X p_t=0x%08X p_o=0x%08X\n", data->p_r,
-	       data->p_g, data->p_t, data->p_o);
-	printk("MLX90632 calibration: Ea=0x%08X Eb=0x%08X Fa=0x%08X Fb=0x%08X Ga=0x%08X Gb=0x%04X "
-	       "Ka=0x%04X Ha=0x%04X Hb=0x%04X\n",
-	       data->ea, data->eb, data->fa, data->fb, data->ga, data->gb, data->ka, data->ha,
-	       data->hb);
-}
-#endif
 
 static int mlx90632_reg_write(const struct device *dev, uint16_t reg, uint16_t val)
 {
@@ -366,9 +345,6 @@ static int mlx90632_init(const struct device *dev)
 		return ret;
 	}
 
-#ifdef CONFIG_MLX90632_DEBUG
-	mlx90632_log_calibration(dev);
-#endif
 
 	int was_reset = mlx90632_set_refresh_rate(dev);
 
@@ -416,14 +392,8 @@ static int32_t mlx90632_calc_amb(struct mlx90632_data *data)
 	int64_t am_ta = ((int64_t)data->ram_6 * 1000LL) / 12LL;
 	int64_t KGb = ((int64_t)data->gb * 1000LL) >> 10ULL;
 	int64_t vr_ta = (int64_t)data->ram_9 * 1000000LL + (KGb * am_ta);
-
-	LOG_DBG("p_r: 0x%04X, p_g: 0x%04X, p_t: 0x%04X, p_o: 0x%04X", data->p_r, data->p_g,
-		data->p_t, data->p_o);
-	LOG_DBG("gb: %d, ram_6: %d, ram_9: %d", data->gb, data->ram_6, data->ram_9);
-	LOG_DBG("am_ta: %lld, KGb: %lld, vr_ta: %lld", am_ta, KGb, vr_ta);
 	int64_t tmp = (((am_ta * 1000000000LL) / vr_ta) << 19ULL);
 	tmp = tmp / 1000LL;
-	LOG_DBG("tmp: %lld", tmp);
 	int64_t Asub, Bsub, Ablock, Bblock, Cblock;
 
 	Asub = ((int64_t)data->p_t * 10000000000LL) >> 44ULL;
