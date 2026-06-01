@@ -43,13 +43,7 @@ config MLX90632_REFRESH_RATE
 	help
 	  Set the refresh rate.
 	  Medical Mode: 0=0.5Hz, 1=1Hz, 2=2Hz, 3=4Hz, 4=8Hz, 5=16Hz, 6=32Hz, 7=64Hz.
-	  Extended Mode: 0=0.16Hz, 1=0.32Hz, 2=0.65Hz, 3=1.3Hz, 4=2.6Hz, 5=5Hz, 6=10Hz, 7=20Hz.
-
-config MLX90632_DEBUG
-	bool "Enable MLX90632 debug prints"
-	default n
-	help
-	  Enable early one-shot debug prints for MLX90632 calibration data.
+	  Extended Mode: 0=0.16Hz, 1=0.32Hz, 2=0.65Hz, 3=1.3Hz, 4=2.6Hz, 5=5Hz, 6=10Hz, 7=20Hz. 
 
 config MLX90632_EXTENDED_MODE
 	bool "Enable Extended Range Mode"

@@ -68,7 +68,8 @@ static int mlx90632_read_32bit_param(const struct device *dev, uint16_t addr, in
 	}
 
 	*dest = (int32_t)((uint32_t)ms << 16 | ls);
-
+	return 0;
+}
 
 static int mlx90632_reg_write(const struct device *dev, uint16_t reg, uint16_t val)
 {
@@ -211,7 +212,8 @@ static int mlx90632_set_refresh_rate(const struct device *dev)
 		num_regs = 2;
 	}
 
-	ret = mlx90632_reg_read(dev, IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE) ? 0x24F1 : 0x24E1, &current_ee);
+	ret = mlx90632_reg_read(dev, IS_ENABLED(CONFIG_MLX90632_EXTENDED_MODE) ? 0x24F1 : 0x24E1,
+				&current_ee);
 	if (ret == 0 && current_ee == target_ee1) {
 		return 0;
 	}
@@ -344,7 +346,6 @@ static int mlx90632_init(const struct device *dev)
 	if (ret < 0) {
 		return ret;
 	}
-
 
 	int was_reset = mlx90632_set_refresh_rate(dev);
 
